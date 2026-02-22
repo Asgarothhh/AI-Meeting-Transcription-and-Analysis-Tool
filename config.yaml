@@ -1,0 +1,21 @@
+device: "cpu"
+batch_size: 16
+compute_type: "float32"
+language: "ru"
+
+models:
+  whisper: "medium"
+
+paths:
+  output_dir: "outputs"
+  temp_dir: "temp"
+  model_dir: "models"
+  hf_cache: "models/huggingface"
+  torch_cache: "models/torch"
+  whisper_cache: "models/whisper"
+
+
+features:
+  enable_summarization: true
+  enable_word_timestamps: true
+
