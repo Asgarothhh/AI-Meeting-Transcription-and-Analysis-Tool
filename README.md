@@ -1,5 +1,4 @@
 # AI-Meeting-Transcription-and-Analysis-Tool
-# 🎙️ Meeting Intelligence: AI Transcription & Analysis Tool
 
 **Meeting Intelligence** — это мощное десктопное приложение для автоматизации обработки совещаний. Оно извлекает текст из аудио и видео, разделяет голоса спикеров и генерирует интеллектуальное саммари с помощью LLM.
 
