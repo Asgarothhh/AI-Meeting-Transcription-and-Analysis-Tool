@@ -1,3 +1,4 @@
 .env
-dialogue.mp3
-dialogue.wav
+/.venv
+/.idea
+/temp

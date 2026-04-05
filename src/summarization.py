@@ -1,16 +1,17 @@
 import operator
-from typing import TypedDict, Annotated, List
 import os
-from langchain_openai import ChatOpenAI
+from typing import TypedDict, Annotated, List
+
+from dotenv import load_dotenv
 from langchain_core.messages import HumanMessage
+from langchain_openai import ChatOpenAI
 from langgraph.constants import Send
 from langgraph.graph import StateGraph, START, END
-from dotenv import load_dotenv
 
 load_dotenv()
 
 model = ChatOpenAI(
-    model="stepfun/step-3.5-flash:free",
+    model="qwen/qwen3.6-plus:free",
     api_key=os.environ["OPENROUTER_API_KEY"],
     base_url="https://openrouter.ai/api/v1",
     temperature=0

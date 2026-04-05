@@ -1,7 +1,7 @@
 device: "cpu"
 batch_size: 16
-compute_type: "float32"
-language: "ru"
+compute_type: "int8"
+language: null
 
 models:
   whisper: "medium"
@@ -14,8 +14,6 @@ paths:
   torch_cache: "models/torch"
   whisper_cache: "models/whisper"
 
-
 features:
   enable_summarization: true
   enable_word_timestamps: true
-

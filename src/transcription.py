@@ -1,11 +1,16 @@
 import gc
 import logging
+import os
 from pathlib import Path
-import torch
-import torchaudio
-import whisperx
+from pyannote.audio import Pipeline
 import numpy as np
-from config import Config
+import torch
+import whisperx
+from dotenv import load_dotenv
+
+from src.config import Config
+
+load_dotenv()
 
 logging.basicConfig(
     level=logging.INFO,
@@ -29,6 +34,7 @@ class TranscriptionPipeline:
             self.compute_type = "int8"
 
         self.whisper_model = None
+        self.diarize_model = None
         self.align_model = None
         self.align_metadata = None
 
@@ -38,16 +44,51 @@ class TranscriptionPipeline:
             self.whisper_model = whisperx.load_model(
                 self.model_name,
                 self.device,
+                language=self.language,
                 compute_type=self.compute_type
             )
 
     def load_alignment(self, language_code: str):
+        """Загрузка модели выравнивания (alignment)."""
         if self.align_model is None:
-            log.info("Loading alignment model...")
+            log.info(f"Loading alignment model for: {language_code}...")
             self.align_model, self.align_metadata = whisperx.load_align_model(
                 language_code=language_code,
                 device=self.device
             )
+
+    def diarize(self, audio, aligned):
+        try:
+            hf_token = os.environ.get("HF_TOKEN")
+            if not hf_token:
+                log.warning("HF_TOKEN не найден")
+                return aligned
+
+            if not hasattr(self, "diarize_model") or self.diarize_model is None:
+                self.diarize_model = Pipeline.from_pretrained(
+                    "pyannote/speaker-diarization-3.1",
+                    token=hf_token
+                )
+
+            diarization = self.diarize_model(audio)
+
+            diarize_segments = []
+            for turn, _, speaker in diarization.itertracks(yield_label=True):
+                diarize_segments.append({
+                    "start": turn.start,
+                    "end": turn.end,
+                    "speaker": speaker
+                })
+
+            return whisperx.assign_word_speakers(
+                diarize_segments,
+                aligned,
+                fill_nearest=True
+            )
+
+        except Exception as e:
+            log.error(f"Diarization failed: {e}")
+            return aligned
 
     @staticmethod
     def preprocess_audio(path: str):
@@ -91,15 +132,6 @@ class TranscriptionPipeline:
             self.device,
             return_char_alignments=False
         )
-
-    def diarize(self, audio, aligned):
-        try:
-            log.info("Running diarization...")
-            diarized = whisperx.diarize(audio, aligned, device=self.device)
-            return whisperx.assign_word_speakers(diarized, aligned)
-        except Exception as e:
-            log.warning(f"Diarization failed: {e}")
-            return aligned
 
     @staticmethod
     def free_memory():
