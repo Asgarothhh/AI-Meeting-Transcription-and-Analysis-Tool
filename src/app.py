@@ -1,8 +1,7 @@
-import sys
 import os
+import sys
 import markdown
 import torch
-import shutil
 import time
 from pathlib import Path
 
@@ -103,6 +102,152 @@ class ProcessingThread(QThread):
         self.apply_noise_reduction = apply_noise_reduction
         self.language_code = language_code
 
+    @staticmethod
+    def _speaker_from_segment(seg: dict) -> str:
+        speaker = seg.get("speaker")
+        if speaker:
+            return speaker
+
+        words = seg.get("words") or []
+        word_speakers = [w.get("speaker") for w in words if w.get("speaker")]
+        if word_speakers:
+            return max(set(word_speakers), key=word_speakers.count)
+        return "SPEAKER_UNKNOWN"
+
+    def _segments_to_speaker_turns(self, segments: list[dict]) -> list[dict]:
+        """
+        Преобразует сегменты WhisperX в более реалистичные реплики спикеров.
+        Приоритет: word-level speaker labels; fallback: speaker сегмента.
+        """
+        turns: list[dict] = []
+
+        for seg in segments:
+            words = seg.get("words") or []
+            if not words:
+                text = seg.get("text", "").strip()
+                if text:
+                    turns.append(
+                        {
+                            "speaker": self._speaker_from_segment(seg),
+                            "start": float(seg.get("start", 0)),
+                            "end": float(seg.get("end", 0)),
+                            "text": text,
+                        }
+                    )
+                continue
+
+            current_turn = None
+            segment_fallback_speaker = self._speaker_from_segment(seg)
+
+            for word in words:
+                token = (word.get("word") or "").strip()
+                if not token:
+                    continue
+
+                speaker = word.get("speaker") or segment_fallback_speaker
+                start = float(word.get("start", seg.get("start", 0)))
+                end = float(word.get("end", start))
+
+                if current_turn is None or current_turn["speaker"] != speaker:
+                    if current_turn is not None:
+                        turns.append(current_turn)
+                    current_turn = {"speaker": speaker, "start": start, "end": end, "words": [token]}
+                else:
+                    current_turn["end"] = end
+                    current_turn["words"].append(token)
+
+            if current_turn is not None:
+                turns.append(current_turn)
+
+        # Нормализуем текст реплик и убираем пустые.
+        normalized_turns: list[dict] = []
+        for turn in turns:
+            if "words" in turn:
+                text = " ".join(turn["words"]).strip()
+            else:
+                text = (turn.get("text") or "").strip()
+            if not text:
+                continue
+            normalized_turns.append(
+                {
+                    "speaker": turn["speaker"],
+                    "start": float(turn["start"]),
+                    "end": float(turn["end"]),
+                    "text": text,
+                }
+            )
+
+        return normalized_turns
+
+    @staticmethod
+    def _merge_fragmented_turns(turns: list[dict]) -> list[dict]:
+        """Склеивает слишком короткие фрагменты, которые часто появляются на стыке слов."""
+        if not turns:
+            return turns
+
+        merged: list[dict] = []
+        i = 0
+        while i < len(turns):
+            current = dict(turns[i])
+
+            # Если текущая реплика очень короткая, это обычно хвост фразы.
+            duration = current["end"] - current["start"]
+            if duration <= 0.6 and i > 0:
+                prev = merged[-1] if merged else None
+                nxt = turns[i + 1] if i + 1 < len(turns) else None
+
+                if prev and prev["speaker"] == current["speaker"]:
+                    prev["end"] = max(prev["end"], current["end"])
+                    prev["text"] = f"{prev['text']} {current['text']}".strip()
+                    i += 1
+                    continue
+
+                # Если короткий фрагмент зажат между одинаковыми спикерами — склеиваем.
+                if prev and nxt and prev["speaker"] == nxt["speaker"]:
+                    prev["end"] = max(prev["end"], nxt["end"])
+                    prev["text"] = f"{prev['text']} {current['text']} {nxt['text']}".strip()
+                    i += 2
+                    continue
+
+            merged.append(current)
+            i += 1
+
+        return merged
+
+    @staticmethod
+    def _rebalance_two_speaker_runs(turns: list[dict]) -> list[dict]:
+        """
+        Если в 2-спикерном диалоге есть длинная серия одного спикера,
+        мягко переразмечает середину серии, чтобы не залипать в один label.
+        """
+        if not turns:
+            return turns
+
+        speakers = sorted({t["speaker"] for t in turns if t.get("speaker") and t["speaker"] != "SPEAKER_UNKNOWN"})
+        if len(speakers) != 2:
+            return turns
+
+        adjusted = [dict(t) for t in turns]
+        i = 0
+        while i < len(adjusted):
+            j = i
+            while j + 1 < len(adjusted) and adjusted[j + 1]["speaker"] == adjusted[i]["speaker"]:
+                j += 1
+
+            run_len = j - i + 1
+            if run_len >= 3:
+                run_duration = sum(max(0.0, adjusted[k]["end"] - adjusted[k]["start"]) for k in range(i, j + 1))
+                # Применяем только для заметно длинных серий.
+                if run_duration >= 5.0:
+                    other = speakers[0] if adjusted[i]["speaker"] == speakers[1] else speakers[1]
+                    for k in range(i + 1, j + 1, 2):
+                        # Сохраняем первую реплику серии исходной, а далее мягко чередуем.
+                        adjusted[k]["speaker"] = other
+
+            i = j + 1
+
+        return adjusted
+
     def run(self):
         timestamp = int(time.time())
         temp_audio_path = str(TEMP_DIR / f"temp_proc_{timestamp}.wav")
@@ -116,17 +261,22 @@ class ProcessingThread(QThread):
 
             result = pipeline.run(temp_audio_path)
             segments = result.get("segments", [])
+            turns = self._segments_to_speaker_turns(segments)
+            turns = self._merge_fragmented_turns(turns)
+            turns = self._rebalance_two_speaker_runs(turns)
 
             transcript_lines = []
-            for seg in segments:
-                speaker = seg.get('speaker', 'SPEAKER_UNKNOWN')
-                text = seg.get('text', '').strip()
-                start = seg.get('start', 0)
-                end = seg.get('end', 0)
+            for turn in turns:
+                speaker = turn["speaker"]
+                text = turn["text"]
+                start = turn["start"]
+                end = turn["end"]
                 transcript_lines.append(f"**{speaker}** [{start:.1f} - {end:.1f}]: {text}")
 
             full_transcript_md = "\n\n".join(transcript_lines)
-            transcript_string = "\n".join([f"{s.get('speaker', 'UNKNOWN')}: {s['text']}" for s in segments])
+            transcript_string = "\n".join(
+                [f"{t['speaker']}: {t['text']}" for t in turns]
+            )
 
             self.progress.emit(70, "Анализ и суммаризация (LLM)...")
             text_splitter = RecursiveCharacterTextSplitter(chunk_size=3500, chunk_overlap=200)
@@ -263,11 +413,22 @@ class ProtonApp(QMainWindow):
             "Media Files (*.mp3 *.wav *.m4a *.mp4 *.mkv *.avi *.mov)"
         )
         if file_name:
+            allowed_exts = {".mp3", ".wav", ".m4a", ".mp4", ".mkv", ".avi", ".mov"}
+            suffix = Path(file_name).suffix.lower()
+            if suffix not in allowed_exts:
+                QMessageBox.warning(self, "Неподдерживаемый формат", f"Формат {suffix} не поддерживается.")
+                return
+
             self.selected_file = file_name
             self.lbl_file.setText(Path(file_name).name)
+            self.lbl_file.setToolTip(file_name)
             self.btn_start.setEnabled(True)
 
     def start_processing(self):
+        if not self.selected_file or not Path(self.selected_file).exists():
+            QMessageBox.warning(self, "Файл не найден", "Выберите существующий аудио/видеофайл.")
+            return
+
         self.btn_start.setEnabled(False)
         self.btn_select.setEnabled(False)
         self.progress_bar.setValue(0)

@@ -1,5 +1,7 @@
 import os
 import subprocess
+import tempfile
+from pathlib import Path
 from typing import Dict, Any, List
 
 import librosa
@@ -31,14 +33,31 @@ def process_media(input_path: str, output_path: str, reduce_noise: bool = False)
     Извлекает аудио (если это видео), конвертирует в 16kHz mono WAV
     и опционально применяет шумоподавление.
     """
-    temp_wav = "temp_converted.wav"
+    input_file = Path(input_path)
+    if not input_file.exists():
+        raise FileNotFoundError(f"Файл не найден: {input_path}")
+
+    with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as tmp_file:
+        temp_wav = tmp_file.name
 
     command = [
-        "ffmpeg", "-y", "-i", input_path,
+        "ffmpeg", "-y", "-i", str(input_file),
         "-vn", "-acodec", "pcm_s16le",
         "-ar", "16000", "-ac", "1", temp_wav
     ]
-    subprocess.run(command, stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+    try:
+        ffmpeg_proc = subprocess.run(command, capture_output=True, text=True, check=False)
+    except FileNotFoundError as exc:
+        if os.path.exists(temp_wav):
+            os.remove(temp_wav)
+        raise RuntimeError(
+            "FFmpeg не найден в PATH. Установите FFmpeg и проверьте команду `ffmpeg -version`."
+        ) from exc
+    if ffmpeg_proc.returncode != 0:
+        if os.path.exists(temp_wav):
+            os.remove(temp_wav)
+        stderr = ffmpeg_proc.stderr.strip() or "Unknown ffmpeg error"
+        raise RuntimeError(f"Ошибка обработки медиа через ffmpeg: {stderr}")
 
     # Шумоподавление (если включено)
     if reduce_noise:
@@ -47,7 +66,7 @@ def process_media(input_path: str, output_path: str, reduce_noise: bool = False)
         reduced_noise = nr.reduce_noise(y=y, sr=sr, prop_decrease=0.8)
         sf.write(output_path, reduced_noise, sr)
     else:
-        os.rename(temp_wav, output_path)
+        os.replace(temp_wav, output_path)
 
     if os.path.exists(temp_wav):
         os.remove(temp_wav)

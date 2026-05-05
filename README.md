@@ -6,7 +6,7 @@
 
 ## ✨ Основные возможности
 * **Транскрибация:** высокоточное распознавание речи с помощью `WhisperX`.
-* **Диаризация:** определение того, кто именно произнес фразу (`Pyannote Audio 3.1`).
+* **Диаризация:** определение того, кто именно произнес фразу (`WhisperX DiarizationPipeline` + `pyannote`).
 * **AI-Суммаризация:** автоматическое выделение ключевых моментов, решений и задач через `LangGraph` и модели `Qwen`.
 * **Препроцессинг:** очистка аудио от шумов и нормализация громкости.
 * **Экспорт:** Ссхранение результатов в форматах **PDF**, **DOCX** и **Markdown**.
@@ -69,13 +69,6 @@ source venv/bin/activate
 ```
 ### 2. Установка зависимостей
 ```bash
-# Установка PyTorch (выберите версию под свою ОС/CUDA на pytorch.org)
-pip install torch torchvision torchaudio
-
-# Установка WhisperX напрямую из репозитория
-pip install git+https://github.com/m-bain/whisperX.git
-
-# Установка остальных библиотек
 pip install -r requirements.txt
 ```
 ### 3. Настройка переменных окружения
@@ -86,7 +79,7 @@ HF_TOKEN=your_huggingface_token_here
 ```
 ### 4. Запуск приложения
 ```bash
-python app.py
+python main.py
 ```
 ## 📂 Структура проекта
 * main.py — Точка входа, графический интерфейс.
@@ -95,5 +88,7 @@ python app.py
 * src/utils.py — Обработка аудио и экспорт файлов.
 * config.yaml — Настройки моделей.
 ## ⚠️ Решение проблем
-* SPEAKER_UNKNOWN: Проверьте, приняли ли вы соглашения на Hugging Face для обеих моделей (diarization и segmentation).
-* Низкая скорость на CPU: В config.yaml установите whisper: small или base. Убедитесь, что compute_type установлен в int8.
+* `SPEAKER_UNKNOWN`: проверьте `HF_TOKEN` и доступ к моделям `pyannote/*` (см. раздел выше), затем перезапустите приложение.
+* Ошибка `torch/torchaudio/torchvision` или `torchcodec`: установите версии из `requirements.txt` в чистом окружении (`python -m venv .venv` и `pip install -r requirements.txt`).
+* Ошибка загрузки медиа: убедитесь, что `ffmpeg` доступен из терминала (`ffmpeg -version`), и что файл не занят другой программой.
+* Низкая скорость на CPU: в `src/config.yaml` установите `models.whisper: small` или `base` и `compute_type: int8`.

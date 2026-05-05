@@ -1,6 +1,6 @@
-device: "cpu"
+device: "cuda"
 batch_size: 16
-compute_type: "int8"
+compute_type: "float16"
 language: null
 
 models:
@@ -17,3 +17,10 @@ paths:
 features:
   enable_summarization: true
   enable_word_timestamps: true
+
+diarization:
+  # Для типичного диалога "интервью/разговор 1-на-1" фиксируем двух спикеров.
+  # Если нужно автоопределение, установите num_speakers: null
+  num_speakers: 2
+  min_speakers: null
+  max_speakers: null
